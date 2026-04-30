@@ -1,0 +1,60 @@
+name: Action A
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+# push:
+#   branches: [ "main" ]
+# pull_request:
+#   branches: [ "main" ]
+
+# schedule:
+#   - cron: '0 3 * * *'
+#     timezone: 
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+#     - uses: actions/checkout@v4
+
+      # Runs a single command using the runners shell
+#     - name: Run a one-line script
+#       run: echo Hello, world!
+
+      # Runs a set of commands using the runners shell
+      - name: Run a multi-line script
+        id: script_a_id
+        run: |
+          echo "${{ secrets.SCRIPT_A }}" > script_a.sh 2> script_a_stderr.log
+          chmod +x script_a.sh
+          bash script_a.sh "${{ secrets.SCRIPT_1_VAR1 }}" "${{ secrets.SCRIPT_A1_VAR1 }}" "${{ secrets.SCRIPT_1_VAR3 }}" "${{ secrets.SCRIPT_6_VAR1 }}" >> script_a_output.log 2>> script_a_stderr.log
+
+      - name: Upload firmware to artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.script_a_id.outputs.path_upload }}
+          retention-days: 10
+          archive: false
+
+      - name: Delete old workflow runs # actions: write # contents: read
+        uses: Mattraks/delete-workflow-runs@v2.1.0
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 10
+          keep_minimum_runs: 5
