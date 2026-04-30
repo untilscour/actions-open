@@ -1,0 +1,305 @@
+name: Build OpenWrt
+# based on https://github.com/hhai93/Build-OpenWrt-With-GitHub-Actions/blob/dc3c6541857de7896d08d2e8e01d388025a53cf3/.github/workflows/build-openwrt.yml
+# based on https://github.com/P3TERX/Actions-OpenWrt/blob/decaa5c260535c302a0d59d53b598bb409fd54dd/.github/workflows/openwrt-builder.yml
+
+on:
+# schedule:
+#   - cron: '0 0 * * 0'
+#     timezone: 
+  workflow_dispatch:
+    inputs:
+      T_F:
+        description: '|'
+        required: true
+        default: false
+        type: boolean
+      E:
+        description: 'E'
+        required: true
+        default: 'A'
+        type: choice
+        options:
+          - 0
+          - A
+          - B
+          - C
+          - D
+          - E
+          - F
+          - G
+      EXTRA:
+        description: 'Extra | ib'
+        required: true
+        default: true
+        type: boolean
+      DEBUG_DO:
+        description: 'Debug (-j1 V=sc)'
+        required: true
+        default: false
+        type: boolean
+      DISK_FREE:
+        description: 'Free Up Disk Space'
+        required: true
+        default: false
+        type: boolean
+      CACHE_T:
+        description: 'cache tool*'
+        required: true
+        default: true
+        type: boolean
+      CCACHE_ENABLE:
+        description: 'ccache'
+        required: true
+        default: false
+        type: boolean
+      CACHE_RESTORE_PACKAGES:
+        description: 'cache packages'
+        required: true
+        default: false
+        type: boolean
+      CACHE_RESTORE_DL:
+        description: 'cache downloads and feeds'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: false
+  TZ: UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: ${{ inputs.E }}
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+    - name: Script 1
+      id: script_1_id
+      run: |
+          echo "${{ secrets.SCRIPT_1 }}" > script_1.sh 2> script_1_stderr.log
+          chmod +x script_1.sh
+          bash script_1.sh ${{ inputs.T_F }} "${{ secrets.SCRIPT_1_VAR1 }}" "${{ secrets.SCRIPT_1_VAR2 }}" "${{ secrets.SCRIPT_1_VAR3 }}" >> script_1_output.log 2>> script_1_stderr.log
+
+    - name: Free disk space
+      if: ${{ inputs.DISK_FREE }}
+      uses: jlumbroso/free-disk-space@v1.3.1
+
+    - name: Install dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev p7zip-full python3-dev python3-pyelftools python3-setuptools rsync swig unzip zlib1g-dev file wget ccache
+
+    - name: Clone OpenWrt source
+      uses: actions/checkout@v6
+      with:
+          repository: ${{ steps.script_1_id.outputs.script_1_out1 }}
+          ref: "${{ secrets.REPO_BRANCH }}"
+          token: "${{ secrets.PAT }}"
+          persist-credentials: 'false'
+          path: 'openwrt'
+          fetch-depth: '1'
+
+    - name: Script 2
+      id: script_2_id
+      run: |
+          echo "${{ secrets.SCRIPT_2 }}" > script_2.sh 2> script_2_stderr.log
+          chmod +x script_2.sh
+          bash script_2.sh "${{ secrets.SCRIPT_2_VAR1 }}" >> script_2_output.log 2>> script_2_stderr.log
+
+    - name: Restore Tool* cache
+      if: ${{ inputs.CACHE_T }}
+      id: restore-cache-tool-id
+      uses: actions/cache/restore@v5
+      with:
+          path: |
+            openwrt/staging_dir/host
+            openwrt/build_dir/host
+            openwrt/${{ secrets.T }}
+          key: ${{ runner.os }}-tool-${{ hashFiles('actions-cache-key-t') }}-00000000000000
+
+    - name: Script 3
+      if: ${{ !steps.restore-cache-tool-id.outputs.cache-hit }}
+      id: script_3_id
+      run: |
+          echo "${{ secrets.SCRIPT_3 }}" > script_3.sh 2> script_3_stderr.log
+          chmod +x script_3.sh
+          bash script_3.sh >> script_3_output.log 2>> script_3_stderr.log
+
+    - name: Save Tool* cache
+      if: ${{ inputs.CACHE_T && !steps.restore-cache-tool-id.outputs.cache-hit && steps.script_3_id.outputs.script_3_out1 }}
+      uses: actions/cache/save@v5
+      with:
+          path: |
+            openwrt/staging_dir/host
+            openwrt/build_dir/host
+            openwrt/${{ secrets.T }}
+          key: ${{ runner.os }}-tool-${{ hashFiles('actions-cache-key-t') }}-00000000000000
+
+    - name: Restore Toolchain cache
+      if: ${{ inputs.CACHE_T && !steps.restore-cache-tool-id.outputs.cache-hit && !steps.script_3_id.outputs.script_3_out1 }}
+      uses: actions/cache/restore@v5
+      with:
+          path: |
+            openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/toolchain-*
+          key: ${{ runner.os }}-toolchain-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-toolchain-${{ hashFiles('actions-cache-key-version') }}-
+
+    - name: Restore Feeds cache
+      if: ${{ inputs.CACHE_RESTORE_DL }}
+      uses: actions/cache/restore@v5
+      with:
+          path: openwrt/feeds
+          key: ${{ runner.os }}-feeds-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ steps.script_1_id.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-feeds-${{ hashFiles('openwrt/feeds.conf.default') }}-
+
+    - name: Restore package cache
+      if: ${{ inputs.CACHE_RESTORE_PACKAGES }}
+      uses: actions/cache/restore@v5
+      with:
+          path: |
+            openwrt/staging_dir/packages/*
+            openwrt/staging_dir/target-*
+            openwrt/build_dir/target-*
+          key: ${{ runner.os }}-package-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ steps.script_1_id.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-package-${{ hashFiles('openwrt/feeds.conf.default') }}-
+
+    - name: Restore OpenWrt download cache
+      if: ${{ inputs.CACHE_RESTORE_DL }}
+      uses: actions/cache/restore@v5
+      with:
+          path: openwrt/dl
+          key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-dl-${{ hashFiles('actions-cache-key-version') }}-
+
+    - name: Update feeds
+      working-directory: openwrt
+      run: |
+          if [ -f "$GITHUB_WORKSPACE/$DIY_P1_SH" ]; then
+            bash "$GITHUB_WORKSPACE/$DIY_P1_SH" || { echo "Error: diy-part1.sh failed"; exit 1; }
+          else
+            echo "Warning: diy-part1.sh not found, skipping"
+          fi
+          ./scripts/feeds update -a
+          if [ -f "$GITHUB_WORKSPACE/$DIY_P2_SH" ]; then
+            bash "$GITHUB_WORKSPACE/$DIY_P2_SH" || { echo "Error: diy-part2.sh failed"; exit 1; }
+          else
+            echo "Warning: diy-part2.sh not found, skipping"
+          fi
+          ./scripts/feeds install -a
+
+    - name: Script 4
+      id: script_4_id
+      run: |
+          echo "${{ secrets.SCRIPT_4 }}" > script_4.sh 2> script_4_stderr.log
+          chmod +x script_4.sh
+          bash script_4.sh ${{ steps.restore-cache-tool-id.outputs.cache-hit || steps.script_3_id.outputs.script_3_out1 || false }} ${{ inputs.EXTRA }} "${{ secrets.SCRIPT_4_VAR1 }}" "${{ secrets.SCRIPT_4_VAR2 }}" >> script_4_output.log 2>> script_4_stderr.log
+
+    - name: Restore ccache
+      if: ${{ inputs.CCACHE_ENABLE }}
+      uses: actions/cache/restore@v5
+      with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ hashFiles('actions-cache-key-version') }}-
+
+    - name: Enable ccache
+      if: ${{ inputs.CCACHE_ENABLE }}
+      run: |
+          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
+
+    - name: Script 5
+      id: script_5_id
+      run: |
+          echo "${{ secrets.SCRIPT_5 }}" > script_5.sh 2> script_5_stderr.log
+          chmod +x script_5.sh
+          bash script_5.sh ${{ inputs.DEBUG_DO }} ${{ inputs.CCACHE_ENABLE }} >> script_5_output.log 2>> script_5_stderr.log
+
+    - name: ccache stats
+      if: ${{ inputs.CCACHE_ENABLE }}
+      run: |
+          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
+          ccache -s
+
+    - name: Save ccache
+      if: ${{ !cancelled() && !failure() && inputs.CCACHE_ENABLE }}
+      uses: actions/cache/save@v5
+      with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+
+
+    - name: Save OpenWrt download cache
+      if: ${{ !cancelled() && !failure() && inputs.CACHE_RESTORE_DL }}
+      uses: actions/cache/save@v5
+      with:
+          path: openwrt/dl
+          key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+
+    - name: Save Feeds cache
+      if: ${{ !cancelled() && !failure() && inputs.CACHE_RESTORE_DL }}
+      uses: actions/cache/save@v5
+      with:
+         path: openwrt/feeds
+         key: ${{ runner.os }}-feeds-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ steps.script_1_id.outputs.date }}
+
+    - name: Save Toolchain cache
+      if: ${{ !cancelled() && !failure() && inputs.CACHE_T && !steps.restore-cache-tool-id.outputs.cache-hit && !steps.script_3_id.outputs.script_3_out1 }}
+      uses: actions/cache/save@v5
+      with:
+          path: |
+            openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/toolchain-*
+          key: ${{ runner.os }}-toolchain-${{ hashFiles('actions-cache-key-version') }}-${{ steps.script_1_id.outputs.date }}
+
+    - name: Save package cache
+      if: ${{ !cancelled() && !failure() && inputs.CACHE_RESTORE_PACKAGES }}
+      uses: actions/cache/save@v5
+      with:
+          path: |
+            openwrt/staging_dir/packages/*
+            openwrt/staging_dir/target-*
+            openwrt/build_dir/target-*
+          key: ${{ runner.os }}-package-${{ hashFiles('openwrt/feeds.conf.default') }}-${{ steps.script_1_id.outputs.date }}
+
+    - name: Script 6
+      id: script_6_id
+      if: ${{ always() }}
+      run: |
+          echo "${{ secrets.SCRIPT_6 }}"  > script_6.sh 2> script_6_stderr.log
+          chmod +x script_6.sh
+          bash script_6.sh "${{ secrets.SCRIPT_6_VAR1 }}" "${{ github.token }}" "${{ github.repository }}" >> script_6_output.log 2>> script_6_stderr.log
+
+    - name: Upload firmware to artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+          path: ${{ steps.script_6_id.outputs.path_upload }}
+          retention-days: 10
+          archive: false
+          include-hidden-files: true
+
+    - name: Delete old workflow runs # actions: write # contents: read
+      uses: Mattraks/delete-workflow-runs@v2.1.0
+      with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 10
+          keep_minimum_runs: 5
